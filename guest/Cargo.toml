@@ -1,0 +1,32 @@
+# hyperWIN's helper inside a Windows guest: hyperwin-guest.exe.
+#
+# A workspace of its own, not a member of the one above: it builds on another IronRDP
+# (vendor/IronRDP-guest, tools/vendor-ironrdp.sh), the one with the Windows clipboard that
+# passes files, and two IronRDPs do not resolve in one build. Build it here:
+#   cargo build --release --manifest-path guest/Cargo.toml
+# which leaves guest/target/release/hyperwin-guest.exe, to lie beside hyperwin.exe.
+[package]
+name = "hyperwin-guest-helper"
+description = "hyperWIN's helper inside a Windows guest: the guest's clipboard to the host and back"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "hyperwin-guest"
+path = "src/main.rs"
+
+[workspace]
+
+[dependencies]
+# the sockets and the framing, shared with the host's side
+hyperwin-guest = { path = "../crates/hyperwin-guest" }
+ironrdp-cliprdr = { path = "../vendor/IronRDP-guest/crates/ironrdp-cliprdr" }
+ironrdp-cliprdr-native = { path = "../vendor/IronRDP-guest/crates/ironrdp-cliprdr-native" }
+ironrdp-svc = { path = "../vendor/IronRDP-guest/crates/ironrdp-svc" }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_Com", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+
+[profile.release]
+# it is copied into every guest: small rather than debuggable
+strip = true

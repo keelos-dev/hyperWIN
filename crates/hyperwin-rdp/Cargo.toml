@@ -1,0 +1,43 @@
+[package]
+name = "hyperwin-rdp"
+description = "A VM's console served to RDP clients"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hyperwin-console = { path = "../hyperwin-console" }
+hyperwin-h264 = { path = "../hyperwin-h264" }
+hyperwin-vm = { path = "../hyperwin-vm" }
+# what the helper in a guest says, and the sockets it says it on (clip.rs)
+hyperwin-guest = { path = "../hyperwin-guest" }
+# IronRDP's server with keel-rdp's and hyperMAC's changes (application-defined dynamic channels
+# for keelOS::Video, Hybrid security that also takes TLS-only clients, the password looked up
+# by user name): tools/vendor-ironrdp.sh puts it in vendor/IronRDP, for the whole workspace.
+ironrdp-server = { path = "../../vendor/IronRDP/crates/ironrdp-server", default-features = false, features = ["helper", "rayon"] }
+ironrdp-pdu = { path = "../../vendor/IronRDP/crates/ironrdp-pdu" }
+ironrdp-dvc = { path = "../../vendor/IronRDP/crates/ironrdp-dvc" }
+ironrdp-svc = { path = "../../vendor/IronRDP/crates/ironrdp-svc" }
+ironrdp-rdpsnd = { path = "../../vendor/IronRDP/crates/ironrdp-rdpsnd" }
+ironrdp-cliprdr = { path = "../../vendor/IronRDP/crates/ironrdp-cliprdr" }
+# Opus for RDPSND (sound.rs); libopus built from the crate's bundled source and linked statically
+opus2 = { version = "0.4", features = ["bundled"] }
+ironrdp-core = { path = "../../vendor/IronRDP/crates/ironrdp-core" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+bytes = "1"
+bytemuck = "1"
+tokio-rustls = { version = "0.26", default-features = false }
+rcgen = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+md4 = "0.10"
+getrandom = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+# the network interfaces, for L2 discovery (l2/mod.rs)
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }

@@ -1,0 +1,15 @@
+[package]
+name = "hyperwin-stdsec"
+description = "Standard RDP Security with RC4, as a layer under a client that speaks it without encryption"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+md-5 = "0.10"
+sha1 = "0.10"
+num-bigint = "0.4"
+getrandom = "0.2"

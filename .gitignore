@@ -1,0 +1,9 @@
+.local/
+target/
+vendor/
+*.vhdx
+*.vhd
+*.iso
+*.vmgs
+*.log
+dist/

@@ -1,0 +1,4 @@
+# In every checkout, also on Windows: a shell script or a patch with CRLF line ends does not run
+# or apply. (tools/publish.sh takes this part along and leaves the part above here.)
+*.sh text eol=lf
+*.patch text eol=lf

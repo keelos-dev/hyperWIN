@@ -1,0 +1,29 @@
+[package]
+name = "hyperwin-vm"
+description = "hyperWIN's virtual machines: what they are made of, starting and stopping them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hyperwin-hcs = { path = "../hyperwin-hcs" }
+# the id of the Hyper-V socket service the helper in a guest connects to
+hyperwin-guest = { path = "../hyperwin-guest" }
+# the sound card a VM's host process emulates (host.rs)
+hyperwin-hda = { path = "../hyperwin-hda" }
+# the first start of an unattended install presses a key in the VM's console (unattend.rs)
+hyperwin-console = { path = "../hyperwin-console" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
+
+[dev-dependencies]
+# examples/sound-probe
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

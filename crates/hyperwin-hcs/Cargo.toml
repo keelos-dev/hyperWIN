@@ -1,0 +1,10 @@
+[package]
+name = "hyperwin-hcs"
+description = "The Host Compute System and Host Compute Network APIs, as hyperWIN uses them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No dependencies: computecore.dll and computenetwork.dll are linked as raw-dylibs.
+[dependencies]

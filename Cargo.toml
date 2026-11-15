@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# spikes/ are throwaway programs with their own manifests
+# guest/ is the helper that runs in the guests: a workspace of its own, on another IronRDP
+exclude = ["spikes", "vendor", "guest"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+# IronRDP comes from vendor/IronRDP (tools/vendor-ironrdp.sh): keel-rdp's pin with keel's and
+# hyperMAC's patches, which the RDP server needs (crates/hyperwin-rdp). The console side uses
+# the same sources: two IronRDPs in one build do not resolve (each pins its own pre-release of
+# picky), and this pin already has the frame-buffer channel (ironrdp-vmconnect) and the
+# standard-RDP-security option the console needs.
+ironrdp = { path = "vendor/IronRDP/crates/ironrdp", features = ["connector", "session", "graphics", "dvc"] }
+ironrdp-tokio = { path = "vendor/IronRDP/crates/ironrdp-tokio" }
+ironrdp-vmconnect = { path = "vendor/IronRDP/crates/ironrdp-vmconnect" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time", "signal"] }
+anyhow = "1"
+tracing = "0.1"
+
+[profile.release]
+debug = "line-tables-only"

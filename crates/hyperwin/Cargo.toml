@@ -1,0 +1,19 @@
+[package]
+name = "hyperwin"
+description = "hyperWIN: virtual machines on Windows' own hypervisor, with their consoles served over RDP"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hyperwin-hcs = { path = "../hyperwin-hcs" }
+hyperwin-console = { path = "../hyperwin-console" }
+hyperwin-rdp = { path = "../hyperwin-rdp" }
+hyperwin-vm = { path = "../hyperwin-vm" }
+tokio = { workspace = true }
+windows-service = "0.8"
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

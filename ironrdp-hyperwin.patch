@@ -1,0 +1,134 @@
+hyperWIN's own change to IronRDP, applied after ironrdp-keel.patch and ironrdp-hypermac.patch
+(tools/vendor-ironrdp.sh).
+
+- ironrdp-acceptor: CredSSP's credentials lookup (keel's) is given the domain the client sent
+  too, as `domain\account`, not the account name alone. hyperWIN serves several VMs on one
+  port, and with NLA the domain typed before the user name (`w10\admin`, or `admin@w10`) is
+  the only place a client such as mstsc can say which VM it wants.
+
+- ironrdp-vmconnect: the frame-buffer channel for a client that runs as a service. LocalSystem's
+  token has no logon SID (what the client hello carries), so the channel never started and the
+  session fell back to bitmap updates, quietly: some 360 partial updates a second instead of
+  one whole frame per guest frame. Now the token's own user SID is sent then; a channel that
+  cannot start says so (warn); and the shared buffer's mutex is held for a copy only, the
+  pixel conversion happens after it is released.
+
+--- a/crates/ironrdp-acceptor/src/credssp.rs
++++ b/crates/ironrdp-acceptor/src/credssp.rs
+@@ -70,7 +70,13 @@
+         let credentials = match self {
+             Self::Fixed(c) => c,
+             Self::Lookup(lookup) => {
+-                let secret = lookup(username.account_name()).ok_or_else(|| std::io::Error::other("invalid username"))?;
++                // hyperWIN: the domain the client sent goes to the lookup too, as `domain\account`
++                // (it names the VM the login is for)
++                let name = match username.domain_name() {
++                    Some(domain) if !domain.is_empty() => format!("{domain}\\{}", username.account_name()),
++                    _ => username.account_name().to_owned(),
++                };
++                let secret = lookup(&name).ok_or_else(|| std::io::Error::other("invalid username"))?;
+                 // sspi's NTLM takes "$NTLM$:<hex>" in the password field as the NT hash itself
+                 let password = match secret {
+                     crate::connection::LookupSecret::Password(p) if p.starts_with(sspi::NTLM_HASH_PREFIX) => {
+diff --git a/crates/ironrdp-vmconnect/src/framebuffer.rs b/crates/ironrdp-vmconnect/src/framebuffer.rs
+index 112fdfa1..44cdb904 100644
+--- a/crates/ironrdp-vmconnect/src/framebuffer.rs
++++ b/crates/ironrdp-vmconnect/src/framebuffer.rs
+@@ -12,7 +12,8 @@ use ironrdp_pdu::{PduResult, pdu_other_err};
+ use tracing::{debug, error, trace, warn};
+ use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_ABANDONED_0, WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0};
+ use windows::Win32::Security::{
+-    GetLengthSid, GetTokenInformation, IsValidSid, SID_AND_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
++    GetLengthSid, GetTokenInformation, IsValidSid, SID_AND_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER, TokenGroups,
++    TokenUser,
+ };
+ use windows::Win32::System::Memory::{
+     FILE_MAP_READ, FILE_MAP_WRITE, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, OpenFileMappingW, UnmapViewOfFile,
+@@ -89,14 +90,18 @@ impl DvcProcessor for FrameBufferClient {
+ 
+     fn start(&mut self, _channel_id: u32) -> PduResult<Vec<DvcMessage>> {
+         self.stop_worker();
+-        let sid = current_logon_sid()?;
++        // (hyperWIN: said aloud; without this channel the session quietly falls back to bitmap updates)
++        let sid = current_logon_sid().inspect_err(|e| warn!("the frame-buffer channel cannot start: {e}"))?;
+         Ok(vec![Box::new(ControlPdu::client_hello(&sid)?)])
+     }
+ 
+     fn process(&mut self, _channel_id: u32, payload: &[u8]) -> PduResult<Vec<DvcMessage>> {
+-        let names = parse_server_hello(payload)?;
++        let names = parse_server_hello(payload).inspect_err(|e| warn!("the frame-buffer channel's hello: {e}"))?;
+         self.stop_worker();
+-        self.worker = Some(FrameBufferWorker::start(names, Arc::clone(&self.on_frame))?);
++        self.worker = Some(
++            FrameBufferWorker::start(names, Arc::clone(&self.on_frame))
++                .inspect_err(|e| warn!("the frame-buffer channel's shared buffer: {e}"))?,
++        );
+         Ok(vec![Box::new(ControlPdu::client_ack())])
+     }
+ 
+@@ -339,7 +344,35 @@ fn current_logon_sid() -> PduResult<Vec<u8>> {
+         return Ok(unsafe { core::slice::from_raw_parts(group.Sid.0.cast::<u8>(), sid_length) }.to_vec());
+     }
+ 
+-    Err(pdu_other_err!("current token has no FBR logon SID"))
++    // hyperWIN: a service's token (LocalSystem) has no logon SID. The server only uses the SID to
++    // let this client open the shared frame buffer's objects, so the token's own user does.
++    let mut required = 0u32;
++    // SAFETY: the documented size-probe call; only `required` is written.
++    let _ = unsafe { GetTokenInformation(token.get(), TokenUser, None, 0, &mut required) };
++    let size = usize::try_from(required).map_err(|_| pdu_other_err!("fbr token user size does not fit usize"))?;
++    if size < size_of::<TOKEN_USER>() {
++        return Err(pdu_other_err!("current token has no FBR logon SID"));
++    }
++    let mut buffer = vec![0u8; size];
++    // SAFETY: `buffer` contains `required` writable bytes and `token` remains valid.
++    unsafe {
++        GetTokenInformation(token.get(), TokenUser, Some(buffer.as_mut_ptr().cast()), required, &mut required)
++            .map_err(|error| pdu_other_err!("query FBR token user", source: error))?;
++    }
++    // SAFETY: `GetTokenInformation` initialized a TOKEN_USER; byte storage may be unaligned.
++    let user = unsafe { buffer.as_ptr().cast::<TOKEN_USER>().read_unaligned() }.User;
++    // SAFETY: the SID pointer comes from the token buffer and is valid while `buffer` is alive.
++    if !unsafe { IsValidSid(user.Sid) }.as_bool() {
++        return Err(pdu_other_err!("current token's user SID is invalid"));
++    }
++    // SAFETY: the SID was validated immediately above.
++    let sid_length = usize::try_from(unsafe { GetLengthSid(user.Sid) })
++        .map_err(|_| pdu_other_err!("fbr user SID length does not fit usize"))?;
++    if sid_length == 0 || sid_length > MAX_LOGON_SID_BYTES {
++        return Err(pdu_other_err!("invalid FBR user SID length"));
++    }
++    // SAFETY: GetLengthSid returned the valid byte length for this token-owned SID.
++    Ok(unsafe { core::slice::from_raw_parts(user.Sid.0.cast::<u8>(), sid_length) }.to_vec())
+ }
+ 
+ struct FrameBufferWorker {
+@@ -455,7 +488,9 @@ impl SharedBuffer {
+         })
+     }
+ 
+-    fn take_frame(&mut self) -> Option<Vec<u32>> {
++    /// hyperWIN: the pixels as they lie in the shared buffer; the caller converts them after
++    /// releasing the mutex (the VM's side waits for it to write its next frame).
++    fn take_frame(&mut self) -> Option<Vec<u8>> {
+         // SAFETY: the header mapping contains at least the 16-byte dirty RECT and the mutex is held.
+         let dirty = unsafe {
+             let rect = core::slice::from_raw_parts(self.header.as_ptr(), 16);
+@@ -472,7 +507,7 @@ impl SharedBuffer {
+ 
+         // SAFETY: the pixel view was mapped for exactly `pixel_bytes`.
+         let pixels = unsafe { core::slice::from_raw_parts(self.pixels.as_ptr(), self.layout.pixel_bytes) };
+-        let frame = decode_bgra32(pixels, self.layout);
++        let frame = pixels.to_vec();
+         // SAFETY: the header view has write access and the mutex excludes the server update thread.
+         unsafe {
+             self.header.as_ptr().write_bytes(0, 16);
+@@ -614,7 +649,7 @@ fn present_loop(stop_event: Arc<OwnedHandle>, mut shared: SharedBuffer, on_frame
+                 height = shared.layout.height,
+                 "Received Hyper-V FBR frame"
+             );
+-            on_frame(frame, shared.layout.width, shared.layout.height);
++            on_frame(decode_bgra32(&frame, shared.layout), shared.layout.width, shared.layout.height);
+         }
+     }
+ }

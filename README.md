@@ -39,8 +39,13 @@ hyperWIN does all of that by itself.
 
 ## Getting started
 
-1. Download the zip from [Releases](https://github.com/keelos-dev/hyperWIN/releases) and unpack it.
-2. In an **elevated** terminal, in that folder:
+1. Download `hyperwin-...-setup.exe` from [Releases](https://github.com/keelos-dev/hyperWIN/releases)
+   and double-click it. It checks the PC first (Windows' version, the processor's
+   virtualization, the "Virtual Machine Platform" feature, graphics, memory, disk, ports), says
+   what you have to do about anything in the way, and installs. On a PC with Hyper-V turned on
+   it runs beside it; Hyper-V's own virtual machines are not touched.
+2. Or without the installer: download the zip, unpack it, and in an **elevated** terminal, in
+   that folder:
 
    ```powershell
    .\hyperwin.exe install          # turns on "Virtual Machine Platform", installs the service and the app

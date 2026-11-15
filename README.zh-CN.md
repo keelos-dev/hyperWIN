@@ -21,8 +21,8 @@ Windows 早就有显卡半虚拟化（GPU-PV）：虚拟机直接用宿主的显
 
 ## 上手
 
-1. 从 [Releases](https://github.com/keelos-dev/hyperWIN/releases) 下载 zip 并解压。
-2. 在**管理员**终端里，进到那个文件夹：
+1. 从 [Releases](https://github.com/keelos-dev/hyperWIN/releases) 下载 `hyperwin-...-setup.exe`，双击。它先检查这台电脑（Windows 版本、处理器虚拟化、「虚拟机平台」功能、显卡、内存、磁盘、端口），有挡路的就告诉你怎么处理，没有就安装。开着 Hyper-V 的电脑上它和 Hyper-V 并存，Hyper-V 自己的虚拟机不动。
+2. 不用安装器也行：下载 zip 并解压，在**管理员**终端里，进到那个文件夹：
 
    ```powershell
    .\hyperwin.exe install          # 打开「虚拟机平台」，装上服务和窗口程序

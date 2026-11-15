@@ -14,7 +14,9 @@ $Programs = @(
     (Join-Path $Root 'target\dist\release\hyperwin-app.exe'),
     (Join-Path $Root 'guest\target\dist\release\hyperwin-guest.exe')
 )
-foreach ($p in $Programs) { if (-not (Test-Path $p)) { throw "no ${p}: tools\build-release.ps1 first" } }
+# the installer (it carries the three programs and the notices) is published beside the zip
+$Setup = Join-Path $Root 'target\dist\release\hyperwin-setup.exe'
+foreach ($p in $Programs + $Setup) { if (-not (Test-Path $p)) { throw "no ${p}: tools\build-release.ps1 first" } }
 $Notices = 'LICENSE', 'THIRD_PARTY.md', 'LICENSE-IronRDP-MIT', 'THIRD_PARTY-crates.txt', 'THIRD_PARTY-guest-crates.txt'
 foreach ($n in $Notices) { if (-not (Test-Path (Join-Path $Root $n))) { throw "$n is missing: the zip must carry it" } }
 
@@ -34,7 +36,7 @@ foreach ($pair in @(@('Cargo.lock', 'THIRD_PARTY-crates.txt'), @('guest\Cargo.lo
 # nothing published tells the build PC's user name: the sources' paths the programs keep (as
 # plain text and as UTF-16) are not under the user's profile
 $Home_ = "\Users\$([Environment]::UserName)\"
-foreach ($p in $Programs) {
+foreach ($p in $Programs + $Setup) {
     $Bytes = [IO.File]::ReadAllBytes($p)
     foreach ($Text in [Text.Encoding]::ASCII.GetString($Bytes), [Text.Encoding]::Unicode.GetString($Bytes), [Text.Encoding]::Unicode.GetString($Bytes, 1, $Bytes.Length - 1)) {
         if ($Text.IndexOf($Home_, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
@@ -51,9 +53,8 @@ if ($LASTEXITCODE -ne 0) { $Commit += '-dirty'; Write-Warning 'uncommitted chang
 # (the last commit that changed what they are built from: one that only touched documents or
 # these tools does not make them old)
 $Committed = [DateTimeOffset]::FromUnixTimeSeconds([long](git -C $Root log -1 --format=%ct -- crates guest Cargo.toml Cargo.lock ironrdp-keel.patch ironrdp-hypermac.patch ironrdp-hyperwin.patch ironrdp-krdp.patch tools/vendor-ironrdp.sh assets)).UtcDateTime
-foreach ($p in $Programs) {
-    if ((Get-Item $p).LastWriteTimeUtc -lt $Committed) { throw "$p is older than the last commit: tools\build-release.ps1 again" }
-}
+$Built = Join-Path $Root 'target\dist\built'
+if (-not (Test-Path $Built) -or (Get-Item $Built).LastWriteTimeUtc -lt $Committed) { throw "the programs were built before the last commit: tools\build-release.ps1 again" }
 $Time = (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'")
 $Name = "hyperwin-$($Ver[1].Value).$($Ver[2].Value)-$Commit-$Time-windows-x64"
 
@@ -70,7 +71,9 @@ https://github.com/keelos-dev/hyperWIN
 
 Virtual machines on Windows with 3D acceleration (GPU-PV) and a built-in RDP server.
 
-To install, in an elevated terminal (Run as administrator), in this folder:
+To install: the release's hyperwin-...-setup.exe is the easy way (double-click: it checks the
+PC, says what is missing, and installs). Or, with this zip, in an elevated terminal (Run as
+administrator), in this folder:
 
     .\hyperwin.exe install
 
@@ -92,6 +95,8 @@ if (Test-Path $Zip) { Remove-Item -Force $Zip }
 Compress-Archive -Path (Join-Path $Stage '*') -DestinationPath $Zip
 Remove-Item -Recurse -Force $Stage
 $Sha = (Get-FileHash -Algorithm SHA256 $Zip).Hash.ToLower()
+Copy-Item $Setup (Join-Path $Dist "$Name-setup.exe") -Force
+Write-Host "dist\$Name-setup.exe  ($([int]((Get-Item $Setup).Length / 1MB)) MB)  sha256 $((Get-FileHash -Algorithm SHA256 $Setup).Hash.ToLower())"
 Write-Host "dist\$Name.zip  ($([int]((Get-Item $Zip).Length / 1MB)) MB)"
 Write-Host "sha256 $Sha"
 Write-Host "the release's tag: $Name"

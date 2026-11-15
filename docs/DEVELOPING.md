@@ -39,9 +39,10 @@ cmake 不在 PATH 上时，加上 Visual Studio 自带的那份（`...\BuildTool
 
 1. 改 `Cargo.toml` 和 `guest/Cargo.toml` 里的版本号。`Cargo.lock` 变过就重新生成第三方声明：`python tools/third-party.py`（要 keelOS 仓库里的许可证检查工具）。提交。
 2. `powershell -File tools\build-release.ps1`：从不带本机用户名的路径编译（程序里会留下源码路径）。
-3. `powershell -File tools\package.ps1`：检查并打成 `dist\hyperwin-<主.次>-<提交>-<时间>-windows-x64.zip`，打印 SHA-256。
+   同时编出单文件安装器 `target\dist\release\hyperwin-setup.exe`（`crates/hyperwin-setup`：双击后先检查这台电脑，再安装；三个程序和许可证都带在里面）。自己用的可以加 `-With <krdpclient.exe>` 把 kRDPclient 也带上（控制台按钮用）；带了在本机原地编的程序就不能发布，下一步会拦住。
+3. `powershell -File tools\package.ps1`：检查并打成 `dist\hyperwin-<主.次>-<提交>-<时间>-windows-x64.zip`，旁边放一份 `...-windows-x64-setup.exe`，打印 SHA-256。
 4. `sh tools/publish.sh ../hyperWIN`：把这次提交的内容作为一个提交放进公开仓库的本地克隆。看过之后自己 `git push`。
-5. 在公开仓库建 release：tag 是 zip 的文件名去掉 `.zip`，附件是 zip，正文写这一版的说明和 SHA-256。
+5. 在公开仓库建 release：tag 是 zip 的文件名去掉 `.zip`，附件是 zip 和安装器，正文写这一版的说明和 SHA-256。
 
 ## 许可证
 

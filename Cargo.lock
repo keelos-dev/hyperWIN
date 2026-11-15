@@ -1313,6 +1313,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyperwin-setup"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
+ "winresource",
+]
+
+[[package]]
 name = "hyperwin-stdsec"
 version = "0.1.0"
 dependencies = [

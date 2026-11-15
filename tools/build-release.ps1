@@ -12,7 +12,7 @@
 # a program with the user's folder in it.
 #
 # Needs the MSVC build tools and cmake (Visual Studio's own is added to PATH when none is there).
-param([string]$Root = 'C:\hwbuild')
+param([string]$Root = 'C:\hwbuild', [string[]]$With = @())
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent $PSScriptRoot
 $CargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
@@ -63,8 +63,22 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'cargo build (hyperwin, hyperwin-app) failed' }
     & cargo build --release --target-dir guest\target\dist --manifest-path guest\Cargo.toml
     if ($LASTEXITCODE -ne 0) { throw 'cargo build (the guest helper) failed' }
+    # the installer carries the three programs and the notices (crates\hyperwin-setup\build.rs);
+    # -With adds files to it (krdpclient.exe, for the console button)
+    $Payload = Join-Path $Src 'target\dist\payload'
+    if (Test-Path $Payload) { Remove-Item -Recurse -Force $Payload }
+    New-Item -ItemType Directory -Force $Payload | Out-Null
+    Copy-Item target\dist\release\hyperwin.exe, target\dist\release\hyperwin-app.exe, guest\target\dist\release\hyperwin-guest.exe $Payload
+    Copy-Item LICENSE, THIRD_PARTY.md, LICENSE-IronRDP-MIT, THIRD_PARTY-crates.txt, THIRD_PARTY-guest-crates.txt $Payload
+    foreach ($w in $With) { Copy-Item $w $Payload }
+    $env:HYPERWIN_PAYLOAD = $Payload
+    & cargo build --release --target-dir target\dist -p hyperwin-setup
+    if ($LASTEXITCODE -ne 0) { throw 'cargo build (hyperwin-setup) failed' }
+    # when all of it was last built (cargo leaves a program that is up to date as it is, so the
+    # programs' own times do not say): tools\package.ps1 compares it with the last commit
+    Set-Content -Path target\dist\built -Value (git rev-parse HEAD)
 } finally {
     Pop-Location
 }
-Write-Host 'built: target\dist\release\hyperwin.exe, hyperwin-app.exe; guest\target\dist\release\hyperwin-guest.exe'
+Write-Host 'built: target\dist\release\hyperwin.exe, hyperwin-app.exe, hyperwin-setup.exe; guest\target\dist\release\hyperwin-guest.exe'
 Write-Host 'now: tools\package.ps1'

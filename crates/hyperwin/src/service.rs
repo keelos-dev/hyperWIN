@@ -82,6 +82,7 @@ fn run() -> anyhow::Result<()> {
         let state = options.state.clone();
         tracing::info!(version = env!("CARGO_PKG_VERSION"), state = %state.display(), "hyperWIN service starting");
         crate::watch_installs(state.clone());
+        crate::awake::watch(state.clone());
         // VMs marked autostart, and those that were running when the PC went down (saved to
         // disk then, or shut down); one that does not start is logged and the rest go on
         for vm in hyperwin_vm::list(&state).unwrap_or_default() {

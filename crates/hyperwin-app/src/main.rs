@@ -86,6 +86,7 @@ const SOUND: i32 = 306;
 const CLIP: i32 = 307;
 const GET_CLIENT: i32 = 308;
 const UNINSTALL: i32 = 309;
+const AWAKE: i32 = 310;
 const KRDPCLIENT_URL: &str = "https://github.com/keelos-dev/kRDPclient-releases";
 /// the window's width (and its least), in pixels at 96 DPI: the row of buttons
 const WIDTH: i32 = 1040;
@@ -398,23 +399,26 @@ fn host_page(hwnd: HWND, face: windows_sys::Win32::Graphics::Gdi::HFONT) -> Host
     // the right column
     label(t("SETTINGS"), 1, 0, 0, 18);
     label(t("They apply from the next connection on."), 1, 106, 0, 20);
-    label(t("ACCOUNT"), 1, 144, 0, 18);
-    let account_text = label("", 1, 168, KEEP, 20);
+    label(t("ACCOUNT"), 1, 176, 0, 18);
+    let account_text = label("", 1, 200, KEEP, 20);
     let mut button = |text: &str, id: i32, column: i32, x: i32, y: i32, right: bool| put("BUTTON", text, WS_TABSTOP, id, column, x, y, BUTTON_W, 0, 28, right);
     button(t("Install Service"), SERVICE, 0, 0, 20, true);
     let disconnect = button(t("Disconnect"), DISCONNECT, 0, 0, 84, true);
     button(t("Copy"), COPY_HOST, 0, 0, 204, true);
     button(t("Copy"), COPY_FINGERPRINT, 0, 0, 268, true);
     button(t("New Token"), TOKEN, 0, 0, 316, true);
-    button(t("Password..."), PASSWORD, 1, 0, 164, true);
-    button(t("Get kRDPclient"), GET_CLIENT, 1, 0, 226, false);
-    button(t("Uninstall..."), UNINSTALL, 1, BUTTON_W + 10, 226, false);
+    button(t("Password..."), PASSWORD, 1, 0, 196, true);
+    button(t("Get kRDPclient"), GET_CLIENT, 1, 0, 258, false);
+    button(t("Uninstall..."), UNINSTALL, 1, BUTTON_W + 10, 258, false);
     let mut check = |text: &str, id: i32, column: i32, y: i32| put("BUTTON", text, WS_TABSTOP | BS_AUTOCHECKBOX as u32, id, column, 0, y, 0, 0, 22, false);
     let pause = check(t("Pause remote: no new connections; the ones up stay"), PAUSE, 0, 146);
     let video = check(t("H.264 hardware video (for kRDPclient; off: plain bitmaps)"), VIDEO, 1, 24);
     let sound = check(t("Sound: the virtual machines' sound on the client"), SOUND, 1, 50);
     let clip = check(t("Clipboard: copy and paste text, pictures and files both ways"), CLIP, 1, 76);
-    host.switches = vec![(pause, hyperwin_rdp::control::PAUSED, false), (video, "video", true), (sound, "sound", true), (clip, "clip", true)];
+    // (under the note about connections: this one is the service's, within seconds)
+    let awake = check(t("Keep this PC from sleeping while a virtual machine is running"), AWAKE, 1, 136);
+    host.switches =
+        vec![(pause, hyperwin_rdp::control::PAUSED, false), (video, "video", true), (sound, "sound", true), (clip, "clip", true), (awake, hyperwin_rdp::control::AWAKE, true)];
     (host.service_text, host.remote_text, host.address_text, host.fingerprint_text, host.account_text, host.disconnect) = (service_text, remote_text, address_text, fingerprint_text, account_text, disconnect);
     host
 }
@@ -798,7 +802,7 @@ fn command(hwnd: HWND, id: i32) {
         (NEW, _) => new_vm(hwnd, &state),
         (SERVICE, _) => install_service(hwnd),
         (DISCONNECT, _) => disconnect(hwnd, &state),
-        (PAUSE | VIDEO | SOUND | CLIP, _) => {
+        (PAUSE | VIDEO | SOUND | CLIP | AWAKE, _) => {
             // the switch was just clicked: what it shows now goes into the settings
             let switch = app(|a| a.host.switches.iter().find(|(c, _, _)| unsafe { GetDlgCtrlID(*c) } == id).copied()).flatten();
             if let Some((control, key, _)) = switch {

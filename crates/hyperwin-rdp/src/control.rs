@@ -6,6 +6,9 @@
 //!   connection on, no restart. A HYPERWIN_VIDEO / _SOUND / _CLIP environment variable
 //!   (development) wins over the file. Missing: on; "paused" missing: off. While "paused" is
 //!   on the service turns new connections away; the ones up stay.
+//!   "awake" (missing: on) is not about connections: while it is on and a VM is running the
+//!   service keeps the PC from going to sleep by itself (hyperwin's awake.rs looks every few
+//!   seconds).
 //! - `status.json`: who is connected, written by the service whenever that changes.
 //! - `disconnect`: a file the app makes to have the service end all connections; the service
 //!   looks for it every second and removes it.
@@ -15,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub const PAUSED: &str = "paused";
+pub const AWAKE: &str = "awake";
 
 fn read(state: &Path) -> serde_json::Map<String, serde_json::Value> {
     std::fs::read(state.join("settings.json")).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default()

@@ -139,6 +139,7 @@ const TABLE: &[(&str, &str, &str)] = &[
     ("H.264 hardware video (for kRDPclient; off: plain bitmaps)", "H.264 硬件视频（kRDPclient 用；关掉则走位图）", "H.264 ハードウェア ビデオ (kRDPclient 用。オフ: ビットマップ)"),
     ("Sound: the virtual machines' sound on the client", "声音：把虚拟机的声音传到客户端", "サウンド: 仮想マシンの音をクライアントで再生"),
     ("Clipboard: copy and paste text, pictures and files both ways", "剪贴板：文字、图片、文件双向复制粘贴", "クリップボード: テキスト、画像、ファイルを双方向でコピー・貼り付け"),
+    ("Keep this PC from sleeping while a virtual machine is running", "有虚拟机在运行时不让这台电脑睡眠", "仮想マシンの実行中はこの PC をスリープさせない"),
     ("Not installed", "未安装", "未インストール"),
     ("Service not running", "服务没在运行", "サービスは実行されていません"),
     ("Remote paused: no new connections", "已暂停远程：不接受新连接", "リモートを一時停止中: 新しい接続を受け付けません"),

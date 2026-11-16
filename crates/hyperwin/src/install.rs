@@ -186,6 +186,16 @@ Register-ScheduledTask -TaskName '{TASK}' -Action $action -Trigger $trigger -Pri
     let _ = run("sc", &["description", SERVICE, "hyperWIN: virtual machines, and their screens over RDP"]);
     // restart by itself after a crash: at once, then after 5 s, then every 30 s
     let _ = run("sc", &["failure", SERVICE, "reset=", "3600", "actions=", "restart/0/restart/5000/restart/30000"]);
+    // time for the VMs when the PC goes down (service.rs); sc.exe has no word for this one
+    let preshutdown = (|| {
+        use windows_service::service::ServiceAccess;
+        use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
+        manager.open_service(SERVICE, ServiceAccess::CHANGE_CONFIG)?.set_preshutdown_timeout(crate::service::PRESHUTDOWN_TIME)
+    })();
+    if let Err(e) = preshutdown {
+        println!("  service: Windows will wait 3 minutes, not {}, for the VMs when the PC shuts down ({e})", crate::service::PRESHUTDOWN_TIME.as_secs() / 60);
+    }
     if stopped {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }

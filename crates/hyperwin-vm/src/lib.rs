@@ -19,6 +19,7 @@
 pub mod gpu;
 pub mod helper;
 pub mod host;
+pub mod saved;
 pub mod unattend;
 
 use anyhow::{anyhow, bail, Context as _};
@@ -218,6 +219,10 @@ pub fn change(state: &Path, name: &str, change: impl FnOnce(&mut Config)) -> any
     if vm.state == State::Running {
         bail!("{name} is running: stop it first");
     }
+    if saved::is_saved(state, name) {
+        // (it goes on as the machine it was saved from: a change would not be in it)
+        bail!("{name} is saved to disk: start it and shut it down first, or drop the saved state (hyperwin vm kill {name})");
+    }
     change(&mut vm.config);
     std::fs::write(vms_dir(state).join(name).join("vm.json"), serde_json::to_vec_pretty(&vm.config)?)?;
     Ok(vm)
@@ -370,6 +375,25 @@ pub fn start_with(state: &Path, name: &str, edit: &dyn Fn(&mut serde_json::Value
     if !c.disk.exists() {
         bail!("{name}'s disk {} is not there", c.disk.display());
     }
+    let dir = vms_dir(state).join(name);
+    if saved::exists(&dir) {
+        // Saved to disk: it goes on where it was. (Nothing is copied into its disk before
+        // this start: the guest has that disk open, as far as it knows.)
+        match restore(state, &vm, created) {
+            Ok(()) => {
+                tracing::info!(vm = name, "VM started from its saved state");
+                saved::started(&dir);
+                unattend::set_finish_mark(&dir, unattend::RUNNING);
+                return Ok(());
+            }
+            // rather a VM that boots, as after a power cut, than one that never starts again
+            Err(e) => {
+                tracing::warn!(vm = name, "not started from its saved state ({e:#}): the state is dropped, the VM boots");
+                let _ = hyperwin_hcs::terminate(&c.id);
+                saved::discard_in(&dir);
+            }
+        }
+    }
     if c.gpu && c.os == "windows" {
         // GPU-PV runs the host's driver files inside the guest: keep them the host's current
         // ones. A failure leaves the VM without 3D, not without a start.
@@ -414,6 +438,8 @@ pub fn start_with(state: &Path, name: &str, edit: &dyn Fn(&mut serde_json::Value
             let _ = hyperwin_hcs::terminate(&c.id);
             bail!("start {name}: {e}");
         }
+        // the machine as it was made: what a saved state of it is started with again (saved.rs)
+        let _ = std::fs::write(saved::running_document(&dir), doc.to_string());
         Ok(())
     };
     match (has_guest_services(), create_and_start(has_guest_services())) {
@@ -427,6 +453,7 @@ pub fn start_with(state: &Path, name: &str, edit: &dyn Fn(&mut serde_json::Value
         (false, Err(e)) => return Err(e),
     }
     tracing::info!(vm = name, cpus = c.cpus, memory_mb = c.memory_mb, "VM started");
+    saved::started(&dir);
     unattend::set_finish_mark(&vms_dir(state).join(name), unattend::RUNNING);
     // the first start of an unattended install: Microsoft's ISO wants a key pressed to boot
     let mark = unattend::boot_key_mark(&vms_dir(state).join(name));
@@ -446,6 +473,33 @@ pub fn start_with(state: &Path, name: &str, edit: &dyn Fn(&mut serde_json::Value
             Err(e) => tracing::warn!(vm = name, "no GPU for the VM: {e}"),
         }
     }
+    Ok(())
+}
+
+/// Starts a VM that was saved to disk (saved.rs) from that state: the machine it was, by the
+/// document it was running with, its network adapter's address included.
+fn restore(state: &Path, vm: &Vm, created: &dyn Fn(&str) -> anyhow::Result<()>) -> anyhow::Result<()> {
+    let (name, c) = (&vm.name, &vm.config);
+    let dir = vms_dir(state).join(name);
+    let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(saved::document(&dir))?).context("the saved VM's document")?;
+    let mac = doc.pointer("/VirtualMachine/Devices/NetworkAdapters/0/MacAddress").and_then(|m| m.as_str()).context("the saved VM's document has no MAC address")?.to_owned();
+    let net = network(state)?;
+    let _ = hyperwin_hcs::delete_endpoint(&c.endpoint);
+    let settings = serde_json::json!({"SchemaVersion": {"Major": 2, "Minor": 0}, "Owner": OWNER, "HostComputeNetwork": net, "MacAddress": mac});
+    hyperwin_hcs::create_endpoint(&net, &c.endpoint, &settings.to_string()).map_err(|e| anyhow!("{name}'s network endpoint: {e}"))?;
+    let state_file = saved::memory(&dir);
+    let disks = c.more_disks.iter().map(|d| &d.path);
+    for file in std::iter::once(&c.disk).chain(&c.iso).chain(&c.extra_iso).chain(disks).chain(std::iter::once(&state_file)) {
+        hyperwin_hcs::grant_vm_access(&c.id, file).map_err(|e| anyhow!("let the VM open {}: {e}", file.display()))?;
+    }
+    let running = doc.to_string();
+    doc["VirtualMachine"]["RestoreState"] = serde_json::json!({ "SaveStateFilePath": state_file });
+    hyperwin_hcs::create(&c.id, &doc.to_string()).map_err(|e| anyhow!("create {name}: {e}"))?;
+    created(&c.id).map_err(|e| e.context(format!("{name}'s devices")))?;
+    hyperwin_hcs::start(&c.id).map_err(|e| anyhow!("start {name}: {e}"))?;
+    // it runs: the state is used up, and the document is the running machine's again
+    saved::discard_in(&dir);
+    let _ = std::fs::write(saved::running_document(&dir), running);
     Ok(())
 }
 
@@ -579,9 +633,15 @@ fn keyboard_shut_down(pipe: &str, width: u16, height: u16) -> anyhow::Result<()>
     })
 }
 
-/// Powers the VM off, like pulling the plug.
+/// Powers the VM off, like pulling the plug. A VM that is saved to disk loses that state: the
+/// same thing to it.
 pub fn kill(state: &Path, name: &str) -> anyhow::Result<()> {
     let vm = load(state, name)?;
+    if vm.state != State::Running && saved::is_saved(state, name) {
+        saved::discard(state, name);
+        tracing::info!(vm = name, "the VM's saved state dropped");
+        return Ok(());
+    }
     if vm.state != State::Running {
         bail!("{name} is not running");
     }

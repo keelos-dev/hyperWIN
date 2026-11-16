@@ -332,14 +332,14 @@ dependencies = [
 
 [[package]]
 name = "hyperwin-guest"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "windows-sys",
 ]
 
 [[package]]
 name = "hyperwin-guest-helper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hyperwin-guest",
  "ironrdp-cliprdr",

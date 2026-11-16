@@ -1,6 +1,7 @@
 # Packs what tools\build-release.ps1 built for a release:
 #   dist\hyperwin-<major.minor>-<commit>-<UTC time>-windows-x64.zip
-# with hyperwin.exe, hyperwin-app.exe, hyperwin-guest.exe, a README for whoever unpacks it, and
+# with hyperwin.exe, hyperwin-app.exe, hyperwin-guest.exe, kRDPclient as the build took it
+# (krdpclient.exe and its notices, kRDPclient-*), a README for whoever unpacks it, and
 # the licenses and third-party notices (IronRDP's MIT licence asks for its notice in every
 # copy). The zip's name without ".zip" is the release's tag in the public repository
 # (hyperMAC's and kRDPclient's releases are named the same way).
@@ -17,6 +18,11 @@ $Programs = @(
 # the installer (it carries the three programs and the notices) is published beside the zip
 $Setup = Join-Path $Root 'target\dist\release\hyperwin-setup.exe'
 foreach ($p in $Programs + $Setup) { if (-not (Test-Path $p)) { throw "no ${p}: tools\build-release.ps1 first" } }
+# kRDPclient, when the build took one (tools\build-release.ps1 -Client): the program and its notices
+$Client = @(Get-ChildItem -File (Join-Path $Root 'target\dist\payload') -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -eq 'krdpclient.exe' -or $_.Name -like 'kRDPclient-*' } | ForEach-Object { $_.FullName })
+$ClientExe = @($Client | Where-Object { $_ -like '*\krdpclient.exe' })
+if (-not $ClientExe) { Write-Warning 'no kRDPclient in this build (-Client none): the Console button will use mstsc' }
 $Notices = 'LICENSE', 'THIRD_PARTY.md', 'LICENSE-IronRDP-MIT', 'THIRD_PARTY-crates.txt', 'THIRD_PARTY-guest-crates.txt'
 foreach ($n in $Notices) { if (-not (Test-Path (Join-Path $Root $n))) { throw "$n is missing: the zip must carry it" } }
 
@@ -36,7 +42,7 @@ foreach ($pair in @(@('Cargo.lock', 'THIRD_PARTY-crates.txt'), @('guest\Cargo.lo
 # nothing published tells the build PC's user name: the sources' paths the programs keep (as
 # plain text and as UTF-16) are not under the user's profile
 $Home_ = "\Users\$([Environment]::UserName)\"
-foreach ($p in $Programs + $Setup) {
+foreach ($p in $Programs + $Setup + $ClientExe) {
     $Bytes = [IO.File]::ReadAllBytes($p)
     foreach ($Text in [Text.Encoding]::ASCII.GetString($Bytes), [Text.Encoding]::Unicode.GetString($Bytes), [Text.Encoding]::Unicode.GetString($Bytes, 1, $Bytes.Length - 1)) {
         if ($Text.IndexOf($Home_, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
@@ -62,7 +68,7 @@ $Dist = Join-Path $Root 'dist'
 $Stage = Join-Path $Dist $Name
 if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
 New-Item -ItemType Directory -Force $Stage | Out-Null
-foreach ($p in $Programs) { Copy-Item $p $Stage }
+foreach ($p in $Programs + $Client) { Copy-Item $p $Stage }
 foreach ($n in $Notices) { Copy-Item (Join-Path $Root $n) $Stage }
 $Utf8 = New-Object System.Text.UTF8Encoding $false
 [IO.File]::WriteAllText((Join-Path $Stage 'README.txt'), @"
@@ -86,6 +92,8 @@ To remove:  .\hyperwin.exe uninstall   (the virtual machines and their disks sta
 hyperwin.exe        the command line and the Windows service
 hyperwin-app.exe    the window and the notification icon
 hyperwin-guest.exe  the helper hyperWIN puts into Windows guests (the clipboard)
+krdpclient.exe      kRDPclient, when it is here: the app's Console button shows a VM's
+                    screen with it (its own notices: the kRDPclient-* files)
 
 The programs are not code-signed: SmartScreen may warn at the first start.
 Licenses: LICENSE (hyperWIN, MIT), THIRD_PARTY.md and the files it names.

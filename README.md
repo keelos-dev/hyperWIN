@@ -27,11 +27,15 @@ hyperWIN does all of that by itself.
 - **A screen you can use.** One RDP port serves every VM's console. With
   [kRDPclient](https://github.com/keelos-dev/kRDPclient-releases) the picture is H.264 from
   the host's hardware encoder at up to 60 frames a second; Windows' own `mstsc` connects too
-  (NLA, bitmaps).
+  (NLA, bitmaps). The installer brings kRDPclient along: the app's **Console** button opens
+  a VM's screen with it on the PC itself.
 - **Sound.** Hyper-V gives a VM no sound card. hyperWIN emulates one (Intel HD Audio), which
   Windows guests take with their own driver; the sound goes to the client (Opus or PCM).
 - **Clipboard: text, pictures, files and folders**, both ways, between the guest and the
   client. A small helper does it inside the guest; hyperWIN puts it there itself.
+- **The PC restarts, the VMs come back.** When Windows shuts down or restarts, a running VM
+  is saved to disk and goes on where it was afterwards (guests without the GPU and the sound
+  card: Linux, FreeBSD); the others' guests are asked to shut down, and are started again.
 - **Nothing to install in the guest** by hand: no tools ISO, no agent setup.
 - **An app and a command line.** The app (`hyperwin-app.exe`) has a Host page (who is
   connected, pause, the switches) and a Virtual Machines page; `hyperwin.exe` does the same

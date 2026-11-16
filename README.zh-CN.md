@@ -13,9 +13,10 @@ Windows 早就有显卡半虚拟化（GPU-PV）：虚拟机直接用宿主的显
 - **虚拟机走 Host Compute System**，就是 WSL 2 和 Windows 沙盒底下那一层。只需要 Windows 的「虚拟机平台」功能，不用装 Hyper-V。
 - **3D 加速，并且一直能用。** 勾了 GPU 的虚拟机用宿主的显卡；每次启动前 hyperWIN 自动把虚拟机里的驱动文件和宿主当前的驱动对齐。
 - **Windows 自己装好。** 给它微软的原版 ISO、一个用户名和密码，大约十分钟后虚拟机就到桌面了，带 3D。
-- **看得舒服的画面。** 一个 RDP 端口服务所有虚拟机。用 [kRDPclient](https://github.com/keelos-dev/kRDPclient-releases) 连，画面是宿主显卡硬编的 H.264，最高 60 帧；Windows 自带的 `mstsc` 也能连（NLA，位图）。
+- **看得舒服的画面。** 一个 RDP 端口服务所有虚拟机。用 [kRDPclient](https://github.com/keelos-dev/kRDPclient-releases) 连，画面是宿主显卡硬编的 H.264，最高 60 帧；Windows 自带的 `mstsc` 也能连（NLA，位图）。安装包自带 kRDPclient：窗口程序里的「控制台」按钮用它在本机直接打开虚拟机的画面。
 - **声音。** Hyper-V 不给虚拟机声卡。hyperWIN 模拟一块 Intel HD Audio，Windows 虚拟机用自带驱动就认；声音送到客户端（Opus 或 PCM）。
 - **剪贴板：文字、图片、文件和文件夹**，虚拟机和客户端之间双向。虚拟机里有个小程序负责，hyperWIN 自己把它放进去。
+- **电脑重启，虚拟机自己回来。** Windows 关机或重启时，运行中的虚拟机存到磁盘，开机后接着跑（不带 GPU 和声卡的：Linux、FreeBSD）；其余的请来宾正常关机，开机后再启动。
 - **虚拟机里不用手动装任何东西**：没有工具光盘，没有代理要配。
 - **有窗口程序，也有命令行。** `hyperwin-app.exe` 有「主机」页（谁连着、暂停、各个开关）和「虚拟机」页；`hyperwin.exe` 在终端里做同样的事，并作为 Windows 服务运行。
 

@@ -23,6 +23,12 @@
 //!   hyperwin vm start|stop|kill|remove NAME
 //!       stop asks the guest to shut down; kill powers it off; remove forgets a stopped VM
 //!       (its disk file stays).
+//!   hyperwin vm save NAME
+//!       writes a running VM's state to disk and turns it off; `start` goes on where it was
+//!       (`kill` drops the saved state). Not a VM with the host's GPU or the sound card.
+//!       When the PC shuts down or restarts the service does this to every running VM, asks
+//!       the guests of those that cannot be saved to shut down, and starts them all again
+//!       when the PC is up.
 //!   hyperwin serve [--listen 0.0.0.0:3390] [--web 0.0.0.0:443 | --no-web]
 //!       serves the consoles of all VMs until stopped (Ctrl+C): to kRDPclient (add this
 //!       machine's address as a keelOS host, with a token or the account's password; the VMs
@@ -178,7 +184,8 @@ fn vm(verb: &str, args: &[String]) -> anyhow::Result<()> {
         "list" => {
             for vm in hyperwin_vm::list(&state)? {
                 let c = &vm.config;
-                println!("{:<16} {:<8} {} CPUs, {} MB, {}x{}{}  {}", vm.name, vm.state.name(), c.cpus, c.memory_mb, c.width, c.height, if c.gpu { ", GPU" } else { "" }, c.disk.display());
+                let state_name = if vm.state == hyperwin_vm::State::Stopped && hyperwin_vm::saved::is_saved(&state, &vm.name) { "saved" } else { vm.state.name() };
+                println!("{:<16} {:<8} {} CPUs, {} MB, {}x{}{}  {}", vm.name, state_name, c.cpus, c.memory_mb, c.width, c.height, if c.gpu { ", GPU" } else { "" }, c.disk.display());
             }
         }
         "add" => {
@@ -226,6 +233,8 @@ fn vm(verb: &str, args: &[String]) -> anyhow::Result<()> {
         "host" => hyperwin_vm::host::run(&state, name()?)?,
         "stop" => hyperwin_vm::shut_down(&state, name()?, 60_000)?,
         "kill" => hyperwin_vm::kill(&state, name()?)?,
+        // to disk and off; `start` goes on where it was (not a VM with the host's GPU)
+        "save" => hyperwin_vm::saved::save(&state, name()?)?,
         "remove" => hyperwin_vm::remove(&state, name()?)?,
         // after an install: the CDs out, so the VM no longer waits at "Press any key"
         "eject" => {

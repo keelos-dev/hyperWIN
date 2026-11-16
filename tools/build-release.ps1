@@ -11,8 +11,14 @@
 # stays the developer's, built in place. tools\package.ps1 packs what this built and refuses
 # a program with the user's folder in it.
 #
+# kRDPclient goes along (the app's Console button shows a VM's screen with it; without it the
+# button falls back to Windows' own Remote Desktop client, which asks for the account's
+# password): the published program, taken from kRDPclient's public releases, with the notices
+# of its zip. -Client names which: 'latest' (the default), a release's tag, a zip of one on
+# this PC, or 'none'.
+#
 # Needs the MSVC build tools and cmake (Visual Studio's own is added to PATH when none is there).
-param([string]$Root = 'C:\hwbuild', [string[]]$With = @())
+param([string]$Root = 'C:\hwbuild', [string]$Client = 'latest', [string[]]$With = @())
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent $PSScriptRoot
 $CargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
@@ -63,13 +69,44 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'cargo build (hyperwin, hyperwin-app) failed' }
     & cargo build --release --target-dir guest\target\dist --manifest-path guest\Cargo.toml
     if ($LASTEXITCODE -ne 0) { throw 'cargo build (the guest helper) failed' }
-    # the installer carries the three programs and the notices (crates\hyperwin-setup\build.rs);
-    # -With adds files to it (krdpclient.exe, for the console button)
+    # the installer carries the programs and the notices (crates\hyperwin-setup\build.rs):
+    # ours, kRDPclient's (-Client), and whatever -With names
     $Payload = Join-Path $Src 'target\dist\payload'
     if (Test-Path $Payload) { Remove-Item -Recurse -Force $Payload }
     New-Item -ItemType Directory -Force $Payload | Out-Null
     Copy-Item target\dist\release\hyperwin.exe, target\dist\release\hyperwin-app.exe, guest\target\dist\release\hyperwin-guest.exe $Payload
     Copy-Item LICENSE, THIRD_PARTY.md, LICENSE-IronRDP-MIT, THIRD_PARTY-crates.txt, THIRD_PARTY-guest-crates.txt $Payload
+    if ($Client -ne 'none') {
+        $Zip = $Client
+        if (-not (Test-Path -LiteralPath $Zip -PathType Leaf)) {
+            # a release of the public repository: no login needed
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $Api = 'https://api.github.com/repos/keelos-dev/kRDPclient-releases/releases/'
+            $Api += if ($Client -eq 'latest') { 'latest' } else { "tags/$Client" }
+            $Release = Invoke-RestMethod -Uri $Api -Headers @{ 'User-Agent' = 'hyperwin-build' }
+            $Asset = $Release.assets | Where-Object { $_.name -like '*-windows-x64.zip' } | Select-Object -First 1
+            if (-not $Asset) { throw "kRDPclient's release $($Release.tag_name) has no windows-x64 zip" }
+            $Cache = Join-Path $Src 'target\dist\krdpclient'
+            New-Item -ItemType Directory -Force $Cache | Out-Null
+            $Zip = Join-Path $Cache $Asset.name
+            if (-not (Test-Path $Zip) -or (Get-Item $Zip).Length -ne $Asset.size) {
+                $ProgressPreference = 'SilentlyContinue'
+                Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile $Zip -UseBasicParsing -Headers @{ 'User-Agent' = 'hyperwin-build' }
+            }
+        }
+        $Unpacked = Join-Path $Src 'target\dist\krdpclient\unpacked'
+        if (Test-Path $Unpacked) { Remove-Item -Recurse -Force $Unpacked }
+        Expand-Archive -LiteralPath $Zip -DestinationPath $Unpacked
+        if (-not (Test-Path (Join-Path $Unpacked 'krdpclient.exe'))) { throw "no krdpclient.exe in $Zip" }
+        # its notices beside ours under names of their own (two of them are named as ours are)
+        foreach ($f in Get-ChildItem -File $Unpacked) {
+            $As = if ($f.Name -eq 'krdpclient.exe') { $f.Name } else { "kRDPclient-$($f.Name)" }
+            Copy-Item $f.FullName (Join-Path $Payload $As)
+        }
+        $Taken = [IO.Path]::GetFileNameWithoutExtension($Zip)
+        Set-Content -Path (Join-Path $Payload 'kRDPclient-RELEASE.txt') -Value $Taken
+        Write-Host "kRDPclient: $Taken"
+    }
     foreach ($w in $With) { Copy-Item $w $Payload }
     $env:HYPERWIN_PAYLOAD = $Payload
     & cargo build --release --target-dir target\dist -p hyperwin-setup

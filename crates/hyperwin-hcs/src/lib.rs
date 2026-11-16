@@ -37,6 +37,9 @@ extern "system" {
     fn HcsStartComputeSystem(system: Handle, op: Handle, options: *const u16) -> Hresult;
     fn HcsShutDownComputeSystem(system: Handle, op: Handle, options: *const u16) -> Hresult;
     fn HcsTerminateComputeSystem(system: Handle, op: Handle, options: *const u16) -> Hresult;
+    fn HcsPauseComputeSystem(system: Handle, op: Handle, options: *const u16) -> Hresult;
+    fn HcsResumeComputeSystem(system: Handle, op: Handle, options: *const u16) -> Hresult;
+    fn HcsSaveComputeSystem(system: Handle, op: Handle, options: *const u16) -> Hresult;
     fn HcsGetComputeSystemProperties(system: Handle, op: Handle, query: *const u16) -> Hresult;
     fn HcsModifyComputeSystem(system: Handle, op: Handle, config: *const u16, identity: Handle) -> Hresult;
     fn HcsEnumerateComputeSystems(query: *const u16, op: Handle) -> Hresult;
@@ -228,6 +231,29 @@ pub fn terminate(id: &str) -> Result<()> {
     let system = System::open(id)?;
     // SAFETY: as in start.
     operation("HcsTerminateComputeSystem", OPERATION_MS, |op| unsafe { HcsTerminateComputeSystem(system.0, op, std::ptr::null()) }).map(|_| ())
+}
+
+/// Stops the VM's processors; it stays as it is until [`resume`].
+pub fn pause(id: &str) -> Result<()> {
+    let system = System::open(id)?;
+    // SAFETY: as in start.
+    operation("HcsPauseComputeSystem", OPERATION_MS, |op| unsafe { HcsPauseComputeSystem(system.0, op, std::ptr::null()) }).map(|_| ())
+}
+
+pub fn resume(id: &str) -> Result<()> {
+    let system = System::open(id)?;
+    // SAFETY: as in start.
+    operation("HcsResumeComputeSystem", OPERATION_MS, |op| unsafe { HcsResumeComputeSystem(system.0, op, std::ptr::null()) }).map(|_| ())
+}
+
+/// Writes a paused VM's state (its memory and devices) to a file: `options` is HCS's save
+/// options document (`SaveType`, `SaveStateFilePath`). The VM stays paused. As long as the
+/// memory is large: `timeout_ms` is the caller's.
+pub fn save(id: &str, options: &str, timeout_ms: u32) -> Result<()> {
+    let system = System::open(id)?;
+    let options = wide(options);
+    // SAFETY: as in start; the options string outlives the call.
+    operation("HcsSaveComputeSystem", timeout_ms, |op| unsafe { HcsSaveComputeSystem(system.0, op, options.as_ptr()) }).map(|_| ())
 }
 
 /// The system's properties as JSON; `query` is an HCS property query document or None.

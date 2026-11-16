@@ -7,7 +7,7 @@
 //!       --type sends TEXT as key strokes (US layout; \n is Enter) one second in; in it
 //!       {wait} pauses a second and {win+r}, {esc}, {alt+f4}... are keys by name.
 //!   hyperwin vm list
-//!   hyperwin vm add NAME --disk FILE.vhdx [--disk-gb N] [--iso FILE] [--cpus N] [--memory MB]
+//!   hyperwin vm add NAME [--disk FILE.vhdx] [--disk-gb N] [--iso FILE] [--cpus N] [--memory MB]
 //!                        [--size WxH] [--os windows|linux|freebsd] [--gpu] [--autostart]
 //!                        [--no-sound] [--no-helper]
 //!       --no-helper: hyperWIN puts nothing into the guest (its helper program, which is the
@@ -41,6 +41,10 @@
 //!       with --autostart started with it. See install.rs.
 //!   hyperwin uninstall
 //!       removes the service and the firewall rules; VMs and DIR stay.
+//!   hyperwin storage [DIR]
+//!       where the VMs and the installers are kept: DIR\guests\NAME (a VM's folder: its
+//!       configuration and, unless --disk says otherwise, its disk) and DIR\iso. Without DIR
+//!       it prints the folder. A change does not move the VMs there are, and wants them stopped.
 //!   hyperwin passwd USER [--password P]
 //!       sets hyperWIN's one account (asks for the password when it is not given).
 //!   hyperwin token [--state DIR]
@@ -168,6 +172,14 @@ async fn run(args: &[String]) -> anyhow::Result<()> {
             eprintln!("account set: {user}");
             Ok(())
         }
+        (Some("storage"), dir) => {
+            let state = state_dir(&args[1..]);
+            if let Some(dir) = dir.filter(|d| !d.starts_with("--")) {
+                hyperwin_vm::set_storage(&state, std::path::Path::new(dir))?;
+            }
+            println!("{}", hyperwin_vm::storage(&state).display());
+            Ok(())
+        }
         (Some("token"), _) => {
             let state = state_dir(&args[1..]);
             println!("{}", hyperwin_rdp::web::new_token(&state)?);
@@ -201,7 +213,8 @@ fn vm(verb: &str, args: &[String]) -> anyhow::Result<()> {
                 os: option(args, "--os").unwrap_or("windows").to_owned(),
                 cpus: number("--cpus", 2)?,
                 memory_mb: number("--memory", 4096)?,
-                disk: option(args, "--disk").context("--disk: the VM's disk file (.vhdx)")?.into(),
+                // (no file named: disk.vhdx in the VM's own folder)
+                disk: option(args, "--disk").map_or_else(|| hyperwin_vm::default_disk(&state, args.first().map_or("", String::as_str)), Into::into),
                 iso: option(args, "--iso").map(Into::into),
                 extra_iso: None,
                 width,

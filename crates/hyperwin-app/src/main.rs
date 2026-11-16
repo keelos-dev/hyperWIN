@@ -87,6 +87,7 @@ const CLIP: i32 = 307;
 const GET_CLIENT: i32 = 308;
 const UNINSTALL: i32 = 309;
 const AWAKE: i32 = 310;
+const STORAGE: i32 = 311;
 const KRDPCLIENT_URL: &str = "https://github.com/keelos-dev/kRDPclient-releases";
 /// the window's width (and its least), in pixels at 96 DPI: the row of buttons
 const WIDTH: i32 = 1040;
@@ -139,6 +140,7 @@ struct Host {
     address_text: HWND,
     fingerprint_text: HWND,
     account_text: HWND,
+    storage_text: HWND,
     disconnect: HWND,
     /// the switches: the control, its key in settings.json, and whether missing means on
     switches: Vec<(HWND, &'static str, bool)>,
@@ -401,6 +403,9 @@ fn host_page(hwnd: HWND, face: windows_sys::Win32::Graphics::Gdi::HFONT) -> Host
     label(t("They apply from the next connection on."), 1, 106, 0, 20);
     label(t("ACCOUNT"), 1, 176, 0, 18);
     let account_text = label("", 1, 200, KEEP, 20);
+    // where the VMs and the installers are kept (hyperwin-vm `storage`)
+    label(t("STORAGE"), 1, 300, 0, 18);
+    let storage_text = label("", 1, 324, KEEP, 38);
     let mut button = |text: &str, id: i32, column: i32, x: i32, y: i32, right: bool| put("BUTTON", text, WS_TABSTOP, id, column, x, y, BUTTON_W, 0, 28, right);
     button(t("Install Service"), SERVICE, 0, 0, 20, true);
     let disconnect = button(t("Disconnect"), DISCONNECT, 0, 0, 84, true);
@@ -408,6 +413,7 @@ fn host_page(hwnd: HWND, face: windows_sys::Win32::Graphics::Gdi::HFONT) -> Host
     button(t("Copy"), COPY_FINGERPRINT, 0, 0, 268, true);
     button(t("New Token"), TOKEN, 0, 0, 316, true);
     button(t("Password..."), PASSWORD, 1, 0, 196, true);
+    button(t("Change..."), STORAGE, 1, 0, 320, true);
     button(t("Get kRDPclient"), GET_CLIENT, 1, 0, 258, false);
     button(t("Uninstall..."), UNINSTALL, 1, BUTTON_W + 10, 258, false);
     let mut check = |text: &str, id: i32, column: i32, y: i32| put("BUTTON", text, WS_TABSTOP | BS_AUTOCHECKBOX as u32, id, column, 0, y, 0, 0, 22, false);
@@ -420,6 +426,7 @@ fn host_page(hwnd: HWND, face: windows_sys::Win32::Graphics::Gdi::HFONT) -> Host
     host.switches =
         vec![(pause, hyperwin_rdp::control::PAUSED, false), (video, "video", true), (sound, "sound", true), (clip, "clip", true), (awake, hyperwin_rdp::control::AWAKE, true)];
     (host.service_text, host.remote_text, host.address_text, host.fingerprint_text, host.account_text, host.disconnect) = (service_text, remote_text, address_text, fingerprint_text, account_text, disconnect);
+    host.storage_text = storage_text;
     host
 }
 
@@ -482,6 +489,12 @@ fn host_refresh() {
     }) else {
         return;
     };
+    let Some(storage_text) = app(|a| a.host.storage_text) else { return };
+    let kept = hyperwin_vm::storage(&state);
+    let storage = match free_gb(&kept) {
+        Some(gb) => format!("{}\r\n{}", kept.display(), tf("{} GB free", &gb.to_string())),
+        None => format!("{}\r\n{}", kept.display(), t("This folder is not there now (is the disk attached?)")),
+    };
     let now = remote(&state);
     let service = match (&now, service_running()) {
         (_, None) => t("Not installed"),
@@ -511,14 +524,14 @@ fn host_refresh() {
         None => t("Account: none yet (Password...)").to_owned(),
     };
     let checks: Vec<bool> = switches.iter().map(|(_, key, default)| control::get(&state, key, *default)).collect();
-    let all = format!("{service}|{connected}|{address}|{fingerprint}|{account}|{checks:?}");
+    let all = format!("{service}|{connected}|{address}|{fingerprint}|{account}|{checks:?}|{storage}");
     if all == shown {
         return;
     }
     app(|a| a.host.shown = all);
     // SAFETY: windows of ours.
     unsafe {
-        for (control, words) in [(service_text, service.to_owned()), (remote_text, connected), (address_text, address), (fingerprint_text, fingerprint), (account_text, account)] {
+        for (control, words) in [(service_text, service.to_owned()), (remote_text, connected), (address_text, address), (fingerprint_text, fingerprint), (account_text, account), (storage_text, storage)] {
             if form::window_text(control) != words {
                 SetWindowTextW(control, wide(&words).as_ptr());
             }
@@ -528,6 +541,56 @@ fn host_refresh() {
         }
         EnableWindow(disconnect, i32::from(matches!(now, Remote::Connected(_))));
     }
+}
+
+/// Free space of the volume `folder` is on, in GB; None when the folder is not there.
+fn free_gb(folder: &std::path::Path) -> Option<u64> {
+    let mut free = 0u64;
+    // SAFETY: a path that outlives the call, and one number written.
+    let ok = unsafe { windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(wide(&folder.to_string_lossy()).as_ptr(), &mut free, null_mut(), null_mut()) };
+    (ok != 0).then_some(free >> 30)
+}
+
+/// "Change...": another folder for the VMs and the installers (hyperwin-vm `set_storage`).
+/// The VMs there are stay where they are; not while one runs.
+fn change_storage(hwnd: HWND, state: &std::path::Path) {
+    use windows_sys::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
+    use windows_sys::Win32::UI::Shell::{SHBrowseForFolderW, SHGetPathFromIDListW, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW};
+    if hyperwin_vm::list(state).is_ok_and(|vms| vms.iter().any(|vm| vm.state == hyperwin_vm::State::Running)) {
+        message(hwnd, t("Stop the running virtual machines first: after the change the list shows only the machines of the new place."), MB_OK | MB_ICONWARNING);
+        return;
+    }
+    let title = wide(t("Choose a folder for the virtual machines and the installers"));
+    let mut path = [0u16; 1024];
+    // SAFETY: the structure points at strings that outlive the call; the item list the
+    // dialog returns is freed as its documentation says.
+    let chosen = unsafe {
+        CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED as u32);
+        let mut info: BROWSEINFOW = std::mem::zeroed();
+        info.hwndOwner = hwnd;
+        info.lpszTitle = title.as_ptr();
+        info.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+        let item = SHBrowseForFolderW(&info);
+        if item.is_null() {
+            return;
+        }
+        let ok = SHGetPathFromIDListW(item, path.as_mut_ptr());
+        CoTaskMemFree(item.cast());
+        ok != 0
+    };
+    if !chosen {
+        return;
+    }
+    let folder = PathBuf::from(String::from_utf16_lossy(&path[..path.iter().position(|c| *c == 0).unwrap_or(0)]));
+    match hyperwin_vm::set_storage(state, &folder) {
+        Ok(()) => message(
+            hwnd,
+            &format!("{}\r\n\r\n{}", folder.display(), t("It holds guests (one folder per virtual machine) and iso (installers). The machines there are were not moved: to take one along, move its folder into the new place's guests.")),
+            MB_OK | MB_ICONINFORMATION,
+        ),
+        Err(e) => message(hwnd, &format!("{e:#}"), MB_OK | MB_ICONERROR),
+    };
+    refresh();
 }
 
 fn message(hwnd: HWND, text: &str, icon: u32) -> i32 {
@@ -835,6 +898,7 @@ fn command(hwnd: HWND, id: i32) {
         (UNINSTALL, _) => uninstall(hwnd),
         (SETTINGS, Some(name)) => settings(hwnd, &state, &name),
         (PASSWORD, _) => password(hwnd, &state),
+        (STORAGE, _) => change_storage(hwnd, &state),
         (TOKEN, _) => match hyperwin_rdp::web::new_token(&state) {
             Ok(token) => {
                 to_clipboard(hwnd, &token);
@@ -960,7 +1024,7 @@ fn new_vm(hwnd: HWND, state: &std::path::Path) {
         Field::new(t("Name"), Kind::Text, ""),
         Field::new(t("System"), Kind::Combo(vec![t("Windows").into(), t("Linux").into()]), t("Windows")),
         Field::new(t("Install ISO (optional)"), Kind::Open("ISO images", "*.iso"), ""),
-        Field::new(t("Disk file (.vhdx)"), Kind::Save("Disk files", "*.vhdx"), ""),
+        Field::new(t("Disk file (.vhdx; empty: in the machine's own folder)"), Kind::Save("Disk files", "*.vhdx"), ""),
         Field::new(t("Disk size (GB), when the file is new"), Kind::Number, "64"),
         Field::new(t("CPUs"), Kind::Number, "4"),
         Field::new(t("Memory (MB)"), Kind::Number, "4096"),
@@ -972,6 +1036,7 @@ fn new_vm(hwnd: HWND, state: &std::path::Path) {
         Field::new(t("Its password"), Kind::Password, ""),
         Field::new(t("Start it now"), Kind::Check, "1"),
     ];
+    form::set_iso_folder(hyperwin_vm::iso_dir(state));
     // asked again, with what was typed, until it can be made or is cancelled
     loop {
         if !form::run(hwnd, t("New Virtual Machine"), &mut fields) {
@@ -985,9 +1050,9 @@ fn new_vm(hwnd: HWND, state: &std::path::Path) {
         }
         let windows = v(1) == t("Windows");
         let iso = Some(v(2)).filter(|s| !s.is_empty()).map(PathBuf::from);
-        // no file named: one of the VM's name beside the others
+        // no file named: disk.vhdx in the VM's own folder, in the storage folder
         let disk = match v(3) {
-            typed if typed.is_empty() => state.join("disks").join(format!("{name}.vhdx")),
+            typed if typed.is_empty() => hyperwin_vm::default_disk(state, &name),
             typed => PathBuf::from(typed),
         };
         let unattend = !v(10).is_empty();

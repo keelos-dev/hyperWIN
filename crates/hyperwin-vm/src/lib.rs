@@ -1,8 +1,12 @@
 //! hyperWIN's virtual machines: what each is made of (a file of its own), and starting and
 //! stopping them through the Host Compute System.
 //!
-//! A VM is `<state>\vms\<name>\vm.json` ([`Config`]); its disk and ISO are wherever the
-//! configuration says. Nothing of a VM lives in HCS while it is stopped: starting it builds the
+//! A VM is a folder, `<storage>\guests\<name>`, with `vm.json` in it ([`Config`]) and, unless
+//! its configuration names another place, its disk (`disk.vhdx`). The storage folder
+//! ([`storage`]) is the state folder unless the user chose another (the app's Host page,
+//! `hyperwin storage DIR`): laid out as hyperMAC's and as keelOS lays out its dataset, `guests`
+//! and `iso` (installers). VMs made before this layout are in `<state>\vms`, and stay there.
+//! Nothing of a VM lives in HCS while it is stopped: starting it builds the
 //! HCS document from the configuration, creates the compute system and starts it; when the VM
 //! is off the compute system is gone (or is removed before the next start).
 //!
@@ -133,8 +137,60 @@ pub fn new_id() -> anyhow::Result<String> {
     Ok(format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32]))
 }
 
+/// Where the VMs and the installers are kept: settings.json's "vm_dir" (the same file and the
+/// same word as hyperMAC's), else the state folder.
+pub fn storage(state: &Path) -> PathBuf {
+    settings(state).get("vm_dir").and_then(|d| d.as_str()).map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| state.to_owned())
+}
+
+fn settings(state: &Path) -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read(state.join("settings.json")).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default()
+}
+
+/// Another folder for the VMs and the installers. The VMs there are stay where they are and
+/// are no longer listed: to take one along, move its folder from the old place's `guests`
+/// into the new one's. Not while a VM runs (it would vanish from the list, still running).
+pub fn set_storage(state: &Path, dir: &Path) -> anyhow::Result<()> {
+    if !dir.is_absolute() {
+        bail!("the storage folder must be a full path: not {}", dir.display());
+    }
+    if let Some(vm) = list(state)?.into_iter().find(|vm| vm.state == State::Running) {
+        bail!("{} is running: stop the virtual machines first", vm.name);
+    }
+    // (a folder that holds VMs from before this layout, in `vms`, keeps them there)
+    if !dir.join("vms").is_dir() {
+        std::fs::create_dir_all(dir.join("guests")).with_context(|| format!("create {}", dir.join("guests").display()))?;
+    }
+    std::fs::create_dir_all(dir.join("iso")).with_context(|| format!("create {}", dir.join("iso").display()))?;
+    let mut all = settings(state);
+    all.insert("vm_dir".into(), dir.to_string_lossy().into_owned().into());
+    std::fs::create_dir_all(state)?;
+    let tmp = state.join("settings.json.new");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&all)?)?;
+    std::fs::rename(&tmp, state.join("settings.json"))?;
+    Ok(())
+}
+
+/// The installers' folder: where the app's file dialog for an ISO opens.
+pub fn iso_dir(state: &Path) -> PathBuf {
+    storage(state).join("iso")
+}
+
+/// The disk file of a new VM when none is named: in the VM's own folder.
+pub fn default_disk(state: &Path, name: &str) -> PathBuf {
+    vms_dir(state).join(name).join("disk.vhdx")
+}
+
+/// `guests` in the storage folder. A folder from before this layout has its VMs in `vms`:
+/// used as it is.
 fn vms_dir(state: &Path) -> PathBuf {
-    state.join("vms")
+    let storage = storage(state);
+    let guests = storage.join("guests");
+    if !guests.exists() && storage.join("vms").is_dir() {
+        storage.join("vms")
+    } else {
+        guests
+    }
 }
 
 fn check_name(name: &str) -> anyhow::Result<()> {
@@ -206,6 +262,9 @@ pub fn add(state: &Path, name: &str, mut config: Config, disk_gb: u32) -> anyhow
         bail!("the monitor's size must be even (H.264): not {}x{}", config.width, config.height);
     }
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    if let Some(folder) = config.disk.parent() {
+        std::fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
+    }
     if !config.disk.exists() {
         create_disk(&config.disk, disk_gb, &dir)?;
     }
@@ -233,14 +292,27 @@ pub fn vm_dir(state: &Path, name: &str) -> PathBuf {
     vms_dir(state).join(name)
 }
 
-/// Forgets a stopped VM. Its disk file stays.
+/// Forgets a stopped VM. Its disk files stay, also those in its own folder (where a new VM's
+/// disk is unless another place was named): everything else in the folder goes, and the
+/// folder with it when nothing is left.
 pub fn remove(state: &Path, name: &str) -> anyhow::Result<()> {
     let vm = load(state, name)?;
     if vm.state == State::Running {
         bail!("{name} is running");
     }
     let _ = hyperwin_hcs::delete_endpoint(&vm.config.endpoint);
-    std::fs::remove_dir_all(vms_dir(state).join(name))?;
+    let dir = vms_dir(state).join(name);
+    let disks: Vec<&PathBuf> = std::iter::once(&vm.config.disk).chain(vm.config.more_disks.iter().map(|d| &d.path)).collect();
+    let is_disk = |file: &Path| disks.iter().any(|d| d.as_os_str().eq_ignore_ascii_case(file.as_os_str()));
+    for entry in std::fs::read_dir(&dir)?.flatten() {
+        let path = entry.path();
+        if is_disk(&path) {
+            continue;
+        }
+        if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }.with_context(|| format!("remove {}", path.display()))?;
+    }
+    // (not empty: a disk is in it)
+    let _ = std::fs::remove_dir(&dir);
     Ok(())
 }
 

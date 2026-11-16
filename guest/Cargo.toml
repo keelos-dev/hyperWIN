@@ -8,7 +8,7 @@
 [package]
 name = "hyperwin-guest-helper"
 description = "hyperWIN's helper inside a Windows guest: the guest's clipboard to the host and back"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 license = "MIT"
 publish = false

@@ -306,6 +306,16 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     }
 }
 
+thread_local! {
+    /// Where the file dialog for an ISO opens while its box is empty (`set_iso_folder`).
+    static ISO_FOLDER: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The installers' folder: the file dialog of an empty ISO box opens there.
+pub fn set_iso_folder(folder: std::path::PathBuf) {
+    ISO_FOLDER.with_borrow_mut(|f| *f = Some(folder));
+}
+
 /// The file dialog for a file box; what is chosen goes into the box.
 fn browse(owner: HWND, shape: Shape, edit: HWND) {
     let (what, pattern, save) = match shape {
@@ -326,6 +336,7 @@ fn browse(owner: HWND, shape: Shape, edit: HWND) {
         file[..now.len()].copy_from_slice(&now);
     }
     let extension = wide(pattern.trim_start_matches("*."));
+    let folder = ISO_FOLDER.with_borrow(|f| f.clone()).filter(|f| pattern == "*.iso" && now.len() <= 1 && f.is_dir()).map(|f| wide(&f.to_string_lossy()));
     // SAFETY: the structure points at buffers that outlive the call.
     unsafe {
         let mut ofn: OPENFILENAMEW = std::mem::zeroed();
@@ -335,6 +346,9 @@ fn browse(owner: HWND, shape: Shape, edit: HWND) {
         ofn.lpstrFile = file.as_mut_ptr();
         ofn.nMaxFile = file.len() as u32;
         ofn.lpstrDefExt = extension.as_ptr();
+        if let Some(folder) = &folder {
+            ofn.lpstrInitialDir = folder.as_ptr();
+        }
         ofn.Flags = OFN_HIDEREADONLY | OFN_PATHMUSTEXIST | if save { 0 } else { OFN_FILEMUSTEXIST };
         let chosen = if save { GetSaveFileNameW(&mut ofn) } else { GetOpenFileNameW(&mut ofn) };
         if chosen != 0 {

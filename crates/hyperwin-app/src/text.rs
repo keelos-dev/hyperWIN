@@ -33,6 +33,11 @@ pub fn t(en: &'static str) -> &'static str {
 
 const TABLE: &[(&str, &str, &str)] = &[
     ("New...", "新建...", "新規..."),
+    (
+        "Hyper-V's compute service (vmcompute) has not answered for {} s: the list shows what it said last.",
+        "Hyper-V 的计算服务（vmcompute）已 {} 秒没有回应：列表显示的是它上次的回答。",
+        "Hyper-V のコンピューティング サービス (vmcompute) が {} 秒応答していません。一覧は前回の応答のままです。",
+    ),
     ("Start", "启动", "起動"),
     ("Power Off", "断电", "電源オフ"),
     ("Shut Down", "关机", "シャットダウン"),

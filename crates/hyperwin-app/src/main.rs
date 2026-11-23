@@ -107,6 +107,10 @@ const WM_TRAY: u32 = WM_APP + 2;
 const WM_SELECTED: u32 = WM_APP + 3;
 /// another start of the app asks this one to show itself
 const WM_SHOW: u32 = WM_APP + 4;
+/// the VMs were listed (on a thread): lparam is a Box<Listed>
+const WM_LISTED: u32 = WM_APP + 5;
+/// after this long without an answer from HCS the status line says so
+const SLOW_HCS: std::time::Duration = std::time::Duration::from_secs(5);
 
 const COLUMNS: [(&str, i32); 8] = [("Name", 150), ("State", 110), ("System", 80), ("CPUs", 50), ("Memory", 80), ("Screen", 90), ("GPU", 50), ("CD", 50)];
 type Row = [String; 8];
@@ -114,6 +118,15 @@ type Row = [String; 8];
 struct Done {
     name: String,
     result: Result<(), String>,
+}
+
+/// What a listing thread found: the VMs (HCS answers for their states, and may take its
+/// time: up to hyperwin-hcs's two minutes when it is busy or stuck) and the storage folder's
+/// free space (a folder on a network or a detached disk may take long too). Never asked on
+/// the window's thread: a window that waits for them goes white and stops answering.
+struct Listed {
+    vms: Result<Vec<hyperwin_vm::Vm>, String>,
+    free: Option<u64>,
 }
 
 /// Where a control of the Host page goes: in which of the two columns, how far in and down
@@ -165,6 +178,10 @@ struct App {
     rows: Vec<Row>,
     /// why the VMs could not be listed
     trouble: Option<String>,
+    /// since when a listing thread is out (one at a time)
+    listing: Option<std::time::Instant>,
+    /// the storage folder's free space in GB, as the last listing found it
+    free: Option<u64>,
     tray: bool,
     /// the "keeps running" balloon was shown
     hinted: bool,
@@ -263,6 +280,8 @@ fn main() {
                 busy: HashMap::new(),
                 rows: Vec::new(),
                 trouble: None,
+                listing: None,
+                free: None,
                 tray: false,
                 hinted: false,
                 service,
@@ -291,7 +310,15 @@ fn main() {
 }
 
 /// The app's icon (resource 1, build.rs), or should that fail a PC's from Windows' own.
+/// Loaded once per size and kept: the notification icon asks for it every two seconds, and
+/// an icon loaded each time and never destroyed used up the process's 10,000 GDI objects
+/// in a few days (the window went white and answered nothing).
 fn stock_icon(small: bool) -> HICON {
+    static ICONS: [std::sync::OnceLock<usize>; 2] = [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+    *ICONS[usize::from(small)].get_or_init(|| load_icon(small) as usize) as HICON
+}
+
+fn load_icon(small: bool) -> HICON {
     // SAFETY: the structure is sized as the call wants and written by it.
     unsafe {
         let (cx, cy) = if small { (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)) } else { (GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON)) };
@@ -489,9 +516,10 @@ fn host_refresh() {
     }) else {
         return;
     };
-    let Some(storage_text) = app(|a| a.host.storage_text) else { return };
+    let Some((storage_text, free)) = app(|a| (a.host.storage_text, a.free)) else { return };
     let kept = hyperwin_vm::storage(&state);
-    let storage = match free_gb(&kept) {
+    // (as the last listing found it: asking here could keep the window waiting)
+    let storage = match free {
         Some(gb) => format!("{}\r\n{}", kept.display(), tf("{} GB free", &gb.to_string())),
         None => format!("{}\r\n{}", kept.display(), t("This folder is not there now (is the disk attached?)")),
     };
@@ -556,7 +584,8 @@ fn free_gb(folder: &std::path::Path) -> Option<u64> {
 fn change_storage(hwnd: HWND, state: &std::path::Path) {
     use windows_sys::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
     use windows_sys::Win32::UI::Shell::{SHBrowseForFolderW, SHGetPathFromIDListW, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW};
-    if hyperwin_vm::list(state).is_ok_and(|vms| vms.iter().any(|vm| vm.state == hyperwin_vm::State::Running)) {
+    // (the last listing's states: asking HCS here could keep the window waiting)
+    if app(|a| a.vms.iter().any(|vm| vm.state == hyperwin_vm::State::Running)).unwrap_or(false) {
         message(hwnd, t("Stop the running virtual machines first: after the change the list shows only the machines of the new place."), MB_OK | MB_ICONWARNING);
         return;
     }
@@ -598,19 +627,61 @@ fn message(hwnd: HWND, text: &str, icon: u32) -> i32 {
     unsafe { MessageBoxW(hwnd, wide(text).as_ptr(), wide(TITLE).as_ptr(), icon) }
 }
 
-/// Reads the VMs again and brings the list, the buttons and the status line up to date.
+/// Has the VMs read again (on a thread) and brings the window up to date with what is known
+/// now; the thread's answer brings it up to date again (WM_LISTED).
 fn refresh() {
-    let Some((hwnd, list, status, old, new, words)) = app(|a| {
-        match hyperwin_vm::list(&a.state) {
+    list_vms();
+    show_state();
+}
+
+/// Sends a thread to list the VMs, unless one is out already.
+fn list_vms() {
+    let Some((hwnd, state)) = app(|a| {
+        if a.listing.is_some() {
+            return None;
+        }
+        a.listing = Some(std::time::Instant::now());
+        Some((a.hwnd as isize, a.state.clone()))
+    })
+    .flatten() else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let vms = hyperwin_vm::list(&state).map_err(|e| format!("{e:#}"));
+        let free = free_gb(&hyperwin_vm::storage(&state));
+        let listed = Box::into_raw(Box::new(Listed { vms, free }));
+        // SAFETY: the window takes the box back (WM_LISTED); when it is gone the box is freed here.
+        unsafe {
+            if PostMessageW(hwnd as HWND, WM_LISTED, 0, listed as LPARAM) == 0 {
+                drop(Box::from_raw(listed));
+            }
+        }
+    });
+}
+
+/// A listing thread's answer.
+fn listed(listed: Listed) {
+    app(|a| {
+        a.listing = None;
+        a.free = listed.free;
+        match listed.vms {
             Ok(vms) => {
                 a.vms = vms;
                 a.trouble = None;
             }
             Err(e) => {
                 a.vms.clear();
-                a.trouble = Some(format!("{e:#}"));
+                a.trouble = Some(e);
             }
         }
+    });
+    show_state();
+}
+
+/// Brings the list, the buttons, the Host page and the status line up to date with what the
+/// last listing found: nothing here waits for HCS.
+fn show_state() {
+    let Some((hwnd, list, status, old, new, words)) = app(|a| {
         let mut rows: Vec<Row> = a
             .vms
             .iter()
@@ -797,6 +868,10 @@ fn status_words(a: &App) -> String {
         Some(account) => tf("Account: {}", &account.user),
         None => t("Account: none yet (Password...)").to_owned(),
     };
+    if let Some(since) = a.listing.filter(|since| since.elapsed() >= SLOW_HCS) {
+        let waited = since.elapsed().as_secs().to_string();
+        return format!("{service}    {account}\r\n{}", tf("Hyper-V's compute service (vmcompute) has not answered for {} s: the list shows what it said last.", &waited));
+    }
     let second = match (&a.trouble, own_address()) {
         (Some(trouble), _) => trouble.clone(),
         (None, Some(ip)) => format!("{}    mstsc: {ip}:3390", tf("kRDPclient: add the host {}", &ip)),
@@ -972,7 +1047,7 @@ fn console_token(state: &std::path::Path) -> anyhow::Result<String> {
 ///   first time and can keep it. Sound and the clipboard come along; the picture is RDP's
 ///   bitmaps.
 fn console(state: &std::path::Path, name: &str) -> anyhow::Result<()> {
-    let vm = hyperwin_vm::load(state, name)?;
+    let config = hyperwin_vm::config(state, name)?;
     let krdpclient = std::env::current_exe()?.with_file_name(KRDPCLIENT);
     if krdpclient.exists() {
         std::process::Command::new(&krdpclient)
@@ -986,7 +1061,7 @@ fn console(state: &std::path::Path, name: &str) -> anyhow::Result<()> {
     // know: no warning about it for a connection that never leaves the PC)
     let rdp = format!(
         "full address:s:127.0.0.1:3390\r\nusername:s:{account}@{name}\r\nauthentication level:i:0\r\nscreen mode id:i:1\r\ndesktopwidth:i:{}\r\ndesktopheight:i:{}\r\nsmart sizing:i:1\r\naudiomode:i:0\r\nredirectclipboard:i:1\r\n",
-        vm.config.width, vm.config.height
+        config.width, config.height
     );
     let file = std::env::temp_dir().join(format!("hyperWIN-{name}.rdp"));
     std::fs::write(&file, rdp)?;
@@ -1100,8 +1175,10 @@ fn new_vm(hwnd: HWND, state: &std::path::Path) {
 
 /// Changes what a stopped VM is made of.
 fn settings(hwnd: HWND, state: &std::path::Path, name: &str) {
-    let Ok(vm) = hyperwin_vm::load(state, name) else { return };
-    let c = &vm.config;
+    // (the file alone: the button is there only for a stopped VM, and asking HCS could keep
+    // the window waiting)
+    let Ok(config) = hyperwin_vm::config(state, name) else { return };
+    let c = &config;
     let now = format!("{}x{}", c.width, c.height);
     let mut screens: Vec<String> = ["1280x800", "1920x1080", "1600x900", "1366x768", "1024x768", "2560x1440"].map(String::from).to_vec();
     if !screens.contains(&now) {
@@ -1288,6 +1365,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let what = if done.name.is_empty() { why } else { format!("{}: {why}", done.name) };
                 message(hwnd, &what, MB_OK | MB_ICONERROR);
             }
+            0
+        }
+        WM_LISTED => {
+            listed(*Box::from_raw(lparam as *mut Listed));
             0
         }
         WM_SHOW => {

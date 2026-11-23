@@ -493,7 +493,11 @@ fn ensure_cert(state: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
     let (cert, key) = (dir.join("cert.pem"), dir.join("key.pem"));
     if !cert.exists() || !key.exists() {
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        let host = std::env::var("COMPUTERNAME").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "hyperwin".into());
+        // a DNS name must be ASCII (IA5String): a computer name such as "DESK‘01" made
+        // rcgen refuse and the service stop at every start
+        let host = std::env::var("COMPUTERNAME").unwrap_or_default();
+        let host: String = host.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+        let host = if host.trim_matches('-').is_empty() { "hyperwin".to_owned() } else { host };
         let rcgen::CertifiedKey { cert: made, key_pair } = rcgen::generate_simple_self_signed(vec![host])?;
         std::fs::write(&cert, made.pem())?;
         std::fs::write(&key, key_pair.serialize_pem())?;

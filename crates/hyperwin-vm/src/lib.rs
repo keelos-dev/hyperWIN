@@ -218,10 +218,16 @@ fn state_of(states: &[(String, String)], id: &str) -> State {
     }
 }
 
-pub fn load(state: &Path, name: &str) -> anyhow::Result<Vm> {
+/// A VM's configuration alone: its file, without asking HCS (which may take long to answer)
+/// whether it runs.
+pub fn config(state: &Path, name: &str) -> anyhow::Result<Config> {
     check_name(name)?;
     let path = vms_dir(state).join(name).join("vm.json");
-    let config: Config = serde_json::from_slice(&std::fs::read(&path).with_context(|| format!("no VM named {name} ({})", path.display()))?).with_context(|| format!("{}", path.display()))?;
+    serde_json::from_slice(&std::fs::read(&path).with_context(|| format!("no VM named {name} ({})", path.display()))?).with_context(|| format!("{}", path.display()))
+}
+
+pub fn load(state: &Path, name: &str) -> anyhow::Result<Vm> {
+    let config = config(state, name)?;
     let state = state_of(&hcs_states()?, &config.id);
     Ok(Vm { name: name.to_owned(), config, state })
 }

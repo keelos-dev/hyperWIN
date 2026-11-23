@@ -1,6 +1,6 @@
 Third-party software in hyperwin
 ========================================
-Cargo.lock sha256: f4a3f5512a59de23e7204919a5eb8462ed01f75018205bc1d50ed27dfac2aab6
+Cargo.lock sha256: d65ceae06da12ea406a519097313e0543a3bcb5c01ba648703746022cc2b85c1
 
 adler2 2.0.1
   License: 0BSD OR MIT OR Apache-2.0
